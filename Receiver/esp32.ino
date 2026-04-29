@@ -133,7 +133,8 @@ const unsigned long DEBOUNCE_MS  = 50;
 // Screens: 0=Main  1=Temperature  2=Humidity  3=Bar Graph  4=Numerical
 uint8_t       currentScreen      = 0;
 unsigned long lastScreenSwitch   = 0;
-const unsigned long SCREEN_MS    = 3000; // 3 seconds per screen
+// Screen durations: screen 0 (Main) = 15s, screens 1-4 = 4s each
+const unsigned long SCREEN_DURATIONS[5] = {15000, 4000, 4000, 4000, 4000};
 
 // =============================================================================
 //  FORWARD DECLARATIONS
@@ -242,8 +243,8 @@ void loop() {
   server.handleClient();
   handleButton();
 
-  // --- Auto-advance OLED screen every SCREEN_MS ms --------------------------
-  if (millis() - lastScreenSwitch >= SCREEN_MS) {
+  // --- Auto-advance OLED screen (Main=15s, others=4s) ----------------------
+  if (millis() - lastScreenSwitch >= SCREEN_DURATIONS[currentScreen]) {
     lastScreenSwitch = millis();
     currentScreen = (currentScreen + 1) % 5;
     updateOLED();
