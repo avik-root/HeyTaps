@@ -4,6 +4,10 @@
  * Sensors: HC-SR04 Ultrasonic + DHT11 Temperature/Humidity
  * Radio  : NRF24L01+ (2.4 GHz)
  *
+ * SECURITY: Each unit has a unique 12-char Device ID derived from chip MAC.
+ *   The ID is printed on Serial at boot. The receiver user must enter this
+ *   code on the web portal to pair and authenticate before seeing data.
+ *
  * WIRING TABLE
  * ┌──────────────┬────────────┬──────────────────────────────────────────┐
  * │  Component   │  ESP32-C3  │  Notes                                   │
@@ -12,26 +16,25 @@
  * │ NRF24  GND   │ GND        │                                          │
  * │ NRF24  CE    │ GPIO3      │                                          │
  * │ NRF24  CSN   │ GPIO10     │                                          │
- * │ NRF24  SCK   │ GPIO4      │ SPI clock                                │
- * │ NRF24  MISO  │ GPIO5      │ SPI data in                              │
- * │ NRF24  MOSI  │ GPIO6      │ SPI data out                             │
+ * │ NRF24  SCK   │ GPIO4      │                                          │
+ * │ NRF24  MISO  │ GPIO5      │                                          │
+ * │ NRF24  MOSI  │ GPIO6      │                                          │
  * ├──────────────┼────────────┼──────────────────────────────────────────┤
  * │ HC-SR04 VCC  │ 5V (VBUS)  │ Needs 5V                                 │
  * │ HC-SR04 GND  │ GND        │                                          │
- * │ HC-SR04 TRIG │ GPIO1      │ 10us trigger pulse                       │
+ * │ HC-SR04 TRIG │ GPIO1      │                                          │
  * │ HC-SR04 ECHO │ GPIO2      │ Use voltage divider for 3.3V safety      │
  * ├──────────────┼────────────┼──────────────────────────────────────────┤
  * │ DHT11   VCC  │ 3V3        │                                          │
  * │ DHT11   GND  │ GND        │                                          │
- * │ DHT11   DATA │ GPIO0      │ 10k pull-up resistor to VCC              │
+ * │ DHT11   DATA │ GPIO0      │ 10k pull-up to VCC                       │
  * └──────────────┴────────────┴──────────────────────────────────────────┘
- *
- * Open Serial Monitor at 115200 baud for full diagnostics.
  ******************************************************************************/
 
 #include <SPI.h>
 #include <RF24.h>
 #include <DHT.h>
+// NOTE: Preferences library no longer needed – Device ID is hardcoded below
 
 // =============================================================================
 //  PIN DEFINITIONS
@@ -41,10 +44,8 @@
 #define SCK_PIN   4
 #define MISO_PIN  5
 #define MOSI_PIN  6
-
 #define TRIG_PIN  1
 #define ECHO_PIN  2
-
 #define DHT_PIN   0
 #define DHT_TYPE  DHT11
 
@@ -52,24 +53,31 @@
 //  RF24 SETTINGS  –  must match receiver exactly
 // =============================================================================
 const byte    PIPE_ADDR[6] = "HTAP1";
-const uint8_t RF_CHANNEL   = 108;    // 2508 MHz, above Wi-Fi band
+const uint8_t RF_CHANNEL   = 108;
 
 // =============================================================================
-//  SHARED DATA PACKET  –  identical struct on both ends
+//  DEVICE ID  –  Exactly 12 characters. Change this to match your unit.
+//  The receiver user must enter this code on the web portal to pair.
+//  Use only: A-Z 0-9 (uppercase). Count carefully – must be exactly 12.
+// =============================================================================
+#define DEVICE_ID   "HEYTAPS00001"   // <–– CHANGE THIS (12 chars exactly)
+
+// =============================================================================
+//  SHARED DATA PACKET  –  IDENTICAL struct on both ends
+//  Size: 4 + 4 + 1 + 2 + 12 = 23 bytes (within RF24's 32-byte max)
 // =============================================================================
 struct SensorData {
-  float    temperature;   // degC  (4 bytes)
-  float    humidity;      // %RH   (4 bytes)
-  uint8_t  waterLevel;    // 0-100 (1 byte)  – computed on receiver side
-  uint16_t distance_mm;   // mm    (2 bytes)
-};                        // Total = 11 bytes
+  float    temperature;   // degC    (4 bytes)
+  float    humidity;      // %RH     (4 bytes)
+  uint8_t  waterLevel;    // unused  (1 byte) – receiver recalculates
+  uint16_t distance_mm;   // mm      (2 bytes)
+  char     devId[12];     // Device ID, no null terminator in packet (12 bytes)
+};
 SensorData txData;
-
-// =============================================================================
 //  OBJECTS
 // =============================================================================
-RF24 radio(CE_PIN, CSN_PIN);
-DHT  dht(DHT_PIN, DHT_TYPE);
+RF24        radio(CE_PIN, CSN_PIN);
+DHT         dht(DHT_PIN, DHT_TYPE);
 
 // =============================================================================
 //  COUNTERS
@@ -79,22 +87,21 @@ unsigned long okCount   = 0;
 unsigned long failCount = 0;
 
 // =============================================================================
-//  HC-SR04 – returns distance in mm, 9999 on timeout/error
+//  HC-SR04  –  returns mm, 9999 on timeout
 // =============================================================================
 uint16_t readUltrasonic_mm() {
+  digitalWrite(TRIG_PIN, LOW);  delayMicroseconds(4);
+  digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(4);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-
-  long duration = pulseIn(ECHO_PIN, HIGH, 38000UL); // 38ms timeout ~ 6.5m max
-  if (duration == 0) {
-    Serial.println("  [SONAR] No echo pulse! Check HC-SR04 VCC=5V, TRIG=GPIO1, ECHO=GPIO2");
+  long dur = pulseIn(ECHO_PIN, HIGH, 38000UL);
+  if (dur == 0) {
+    Serial.println("  [SONAR] No echo – check HC-SR04 VCC=5V, TRIG=GPIO1, ECHO=GPIO2");
     return 9999;
   }
-  return (uint16_t)(duration * 0.1715f); // mm = us * 0.1715
+  return (uint16_t)(dur * 0.1715f);
 }
+
+// (No initDeviceId function needed – ID is hardcoded as DEVICE_ID)
 
 // =============================================================================
 //  HELPER
@@ -109,79 +116,62 @@ void printLine(char c = '-', uint8_t n = 55) {
 // =============================================================================
 void setup() {
   Serial.begin(115200);
-  delay(1500); // wait for Serial Monitor to connect
+  delay(1500);
 
   printLine('=');
   Serial.println("  HeyTaps TRANSMITTER  |  ESP32-C3 Super Mini");
   Serial.println("  Build: " __DATE__ "  " __TIME__);
   printLine('=');
 
+  // --- Device ID (hardcoded) -------------------------------------------------
+  static_assert(sizeof(DEVICE_ID)-1 == 12, "DEVICE_ID must be exactly 12 characters!");
+  printLine('*');
+  Serial.print("  DEVICE ID : "); Serial.println(DEVICE_ID);
+  Serial.println("  Enter this on the receiver web portal to pair.");
+  printLine('*');
+
   // --- HC-SR04 ---------------------------------------------------------------
-  Serial.println("[INIT 1/3] HC-SR04 Ultrasonic Sensor");
+  Serial.println("[INIT 1/3] HC-SR04");
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   digitalWrite(TRIG_PIN, LOW);
   delay(100);
   uint16_t d = readUltrasonic_mm();
-  if (d == 9999)
-    Serial.println("  STATUS: FAIL – no echo. Check wiring.");
-  else {
-    Serial.print("  STATUS: OK – reading = "); Serial.print(d); Serial.println(" mm");
-  }
+  if (d == 9999) Serial.println("  STATUS: FAIL – no echo.");
+  else { Serial.print("  STATUS: OK – "); Serial.print(d); Serial.println(" mm"); }
 
   // --- DHT11 -----------------------------------------------------------------
-  Serial.println("[INIT 2/3] DHT11 Temperature/Humidity Sensor");
-  dht.begin();
-  delay(2000); // DHT11 needs 2s warmup
-  float t = dht.readTemperature();
-  float h = dht.readHumidity();
-  if (isnan(t) || isnan(h))
-    Serial.println("  STATUS: FAIL – check DATA=GPIO0 and 10k pull-up resistor.");
-  else {
-    Serial.print("  STATUS: OK – Temp="); Serial.print(t,1);
-    Serial.print("C  Hum="); Serial.print(h,1); Serial.println("%");
-  }
+  Serial.println("[INIT 2/3] DHT11");
+  dht.begin(); delay(2000);
+  float t = dht.readTemperature(), h = dht.readHumidity();
+  if (isnan(t) || isnan(h)) Serial.println("  STATUS: FAIL – check DATA=GPIO0 + 10k pull-up.");
+  else { Serial.print("  STATUS: OK – T="); Serial.print(t,1); Serial.print("C H="); Serial.print(h,1); Serial.println("%"); }
 
   // --- NRF24L01+ -------------------------------------------------------------
-  Serial.println("[INIT 3/3] NRF24L01+ Radio Module");
-  Serial.println("  Pins: CE=GPIO3  CSN=GPIO10  SCK=GPIO4  MISO=GPIO5  MOSI=GPIO6");
-
-  // Important: begin SPI without SS argument; RF24 drives CSN itself
+  Serial.println("[INIT 3/3] NRF24L01+");
   SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
   delay(20);
-
   if (!radio.begin()) {
-    Serial.println("  STATUS: FAIL – NRF24L01 not responding!");
-    Serial.println("  Checklist:");
-    Serial.println("    1. VCC = 3.3V ONLY (NOT 5V)");
-    Serial.println("    2. 100uF capacitor across VCC & GND of the module");
-    Serial.println("    3. CE=GPIO3  CSN=GPIO10  SCK=GPIO4  MISO=GPIO5  MOSI=GPIO6");
-    Serial.println("    4. All GNDs connected together");
-    Serial.println("  Halted. Fix wiring then press RESET.");
+    Serial.println("  STATUS: FAIL – not responding! Check wiring/3.3V/100uF cap.");
     while (true) delay(1000);
   }
-
   radio.setChannel(RF_CHANNEL);
-  radio.setDataRate(RF24_250KBPS);  // best range & sensitivity
+  radio.setDataRate(RF24_250KBPS);
   radio.setPALevel(RF24_PA_HIGH);
   radio.setCRCLength(RF24_CRC_16);
   radio.setAutoAck(true);
-  radio.setRetries(5, 15);          // up to 15 retries, 1.25ms spacing
+  radio.setRetries(5, 15);
   radio.openWritingPipe(PIPE_ADDR);
-  radio.stopListening();            // TX mode
-
+  radio.stopListening();
   Serial.println("  STATUS: OK");
-  Serial.print("  Channel : "); Serial.print(RF_CHANNEL);
-  Serial.print("  ("); Serial.print(2400 + RF_CHANNEL); Serial.println(" MHz)");
-  Serial.print("  Address : "); Serial.println((char*)PIPE_ADDR);
+  Serial.print("  Channel: "); Serial.print(RF_CHANNEL);
+  Serial.print(" ("); Serial.print(2400+RF_CHANNEL); Serial.println(" MHz)");
   Serial.print("  Pkt size: "); Serial.print(sizeof(txData)); Serial.println(" bytes");
-  radio.printDetails(); // full register dump for debugging
 
   printLine('=');
-  Serial.println("  All sensors OK. Starting transmit loop...");
-  Serial.println("  Format: [TX #N]  Dist  Water  Temp  Hum  RF-Status");
+  Serial.println("  Ready. Transmitting every 2s.");
+  Serial.println("  [TX #N]  Dist  Temp  Hum  RF");
   printLine('=');
-  Serial.println();
 }
 
 // =============================================================================
@@ -190,56 +180,40 @@ void setup() {
 void loop() {
   txCount++;
 
-  // 1. Read HC-SR04
+  // 1. HC-SR04
   uint16_t dist_mm = readUltrasonic_mm();
   bool sonarOk = (dist_mm != 9999);
 
-  // 2. Read DHT11
+  // 2. DHT11
   float temp = dht.readTemperature();
   float hum  = dht.readHumidity();
   bool dhtOk = !(isnan(temp) || isnan(hum));
   if (!dhtOk) { temp = 0.0f; hum = 0.0f; }
 
-  // 3. Build packet
-  // NOTE: waterLevel is calculated on the RECEIVER using tank calibration
-  //       set via the web dashboard. We send 0 here; receiver ignores it.
+  // 3. Build packet — embed Device ID in every transmission
   txData.temperature = temp;
   txData.humidity    = hum;
-  txData.waterLevel  = 0;                          // receiver calculates this
+  txData.waterLevel  = 0;
   txData.distance_mm = sonarOk ? dist_mm : 0;
+  memcpy(txData.devId, DEVICE_ID, 12);  // embed hardcoded Device ID in every packet
 
   // 4. Transmit
   bool rfOk = radio.write(&txData, sizeof(txData));
   if (rfOk) okCount++; else failCount++;
 
-  // 5. Serial output
+  // 5. Serial log
   Serial.print("[TX #"); Serial.print(txCount); Serial.print("]  ");
+  Serial.print("Dist="); Serial.print(sonarOk ? String(dist_mm)+"mm" : "ERR");
+  Serial.print("  T=");   Serial.print(dhtOk   ? String(temp,1)+"C"  : "ERR");
+  Serial.print("  H=");   Serial.print(dhtOk   ? String(hum,1)+"%"   : "ERR");
+  Serial.print("  RF=");  Serial.print(rfOk ? "OK" : "FAIL");
+  Serial.print("  (OK:"); Serial.print(okCount); Serial.print("/"); Serial.print(txCount); Serial.println(")");
 
-  Serial.print("Dist=");
-  if (sonarOk) { Serial.print(dist_mm); Serial.print("mm"); }
-  else Serial.print("ERR");
-
-  Serial.print("  Temp=");
-  if (dhtOk) { Serial.print(temp, 1); Serial.print("C"); }
-  else Serial.print("ERR");
-
-  Serial.print("  Hum=");
-  if (dhtOk) { Serial.print(hum, 1); Serial.print("%"); }
-  else Serial.print("ERR");
-
-  Serial.print("  RF="); Serial.print(rfOk ? "OK" : "FAIL");
-  Serial.print("  (OK:"); Serial.print(okCount);
-  Serial.print("/"); Serial.print(txCount); Serial.println(")");
-
-  // Print troubleshooting hint after 5 consecutive failures
   if (!rfOk && (failCount % 5 == 0)) {
     printLine();
-    Serial.println("  [RF FAIL x5] Receiver troubleshooting:");
-    Serial.println("    - Is receiver powered on and running?");
-    Serial.println("    - Both must use: PIPE_ADDR=\"HTAP1\", CH=108, 250KBPS");
-    Serial.println("    - Add 100uF cap on NRF24 VCC/GND on BOTH modules");
+    Serial.println("  [RF FAIL x5] Check: receiver on? PIPE=HTAP1? CH=108? 100uF caps?");
     printLine();
   }
 
-  delay(2000); // transmit every 2 seconds
+  delay(2000);
 }
