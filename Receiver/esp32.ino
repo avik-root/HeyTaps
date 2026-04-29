@@ -77,14 +77,15 @@ const byte    PIPE_ADDR[6] = "HTAP1";
 const uint8_t RF_CHANNEL   = 108;
 
 // =============================================================================
-//  SHARED DATA PACKET  –  identical struct on both ends
+//  SHARED DATA PACKET  –  IDENTICAL struct on both ends (23 bytes)
 // =============================================================================
 struct SensorData {
-  float    temperature;   // degC  (4 bytes)
-  float    humidity;      // %RH   (4 bytes)
-  uint8_t  waterLevel;    // unused from TX, receiver recalculates (1 byte)
-  uint16_t distance_mm;   // raw ultrasonic reading in mm (2 bytes)
-};                        // Total = 11 bytes
+  float    temperature;   // degC   (4 bytes)
+  float    humidity;      // %RH    (4 bytes)
+  uint8_t  waterLevel;    // unused (1 byte)
+  uint16_t distance_mm;   // mm     (2 bytes)
+  char     devId[12];     // Device ID, no null (12 bytes)
+};
 SensorData rxData;
 
 // =============================================================================
@@ -116,6 +117,11 @@ float tankFull_cm   =  5.0f; // sensor-to-water  distance when tank is full
 uint8_t       computedWater     = 0;
 unsigned long lastReceiveMillis = 0;
 bool          dataReceived      = false;
+
+// --- Security ---
+char pairedId[13]     = {0};  // 12-char device ID saved in NVS after pairing
+bool devicePaired     = false;
+bool webAuthenticated = false; // true after successful login; reset on restart
 
 // --- Buzzer (non-blocking) ---
 bool          buzzerActive       = false;
@@ -150,7 +156,11 @@ void    screenBarGraph();
 void    screenNumerical();
 void    checkBuzzer();
 void    updateBuzzerTone();
+bool    isAuthenticated();
 void    handleRoot();
+void    handleLogin();
+void    handlePair();
+void    handleLogout();
 void    handleSet();
 
 // =============================================================================
@@ -193,18 +203,43 @@ void setup() {
   highThreshold = prefs.getInt  ("high",   95);
   tankEmpty_cm  = prefs.getFloat("tempty", 30.0f);
   tankFull_cm   = prefs.getFloat("tfull",   5.0f);
+  String pid = prefs.getString("pairedid", "");
+  if (pid.length() == 12) {
+    pid.toCharArray(pairedId, 13);
+    devicePaired = true;
+    Serial.printf("[SEC] Paired device ID: %s\n", pairedId);
+  } else {
+    Serial.println("[SEC] No device paired yet. Open web portal to pair.");
+  }
   Serial.printf("[BOOT] Thresholds: LOW=%d%%  HIGH=%d%%\n", lowThreshold, highThreshold);
   Serial.printf("[BOOT] Tank cal  : Empty=%.1fcm  Full=%.1fcm\n", tankEmpty_cm, tankFull_cm);
 
-  // --- Wi-Fi AP --------------------------------------------------------------
+  // --- Wi-Fi AP -------------------------------------------------------------
+  // Full reset before starting AP prevents stale state from causing auth failures
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(200);
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(AP_IP, AP_IP, IPAddress(255, 255, 255, 0));
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  Serial.printf("[BOOT] AP started. SSID=%s  IP=%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  // Channel 6, not hidden, max 4 clients
+  bool apOk = WiFi.softAP(AP_SSID, AP_PASSWORD, 6, 0, 4);
+  delay(1000);  // must wait for AP to fully start before clients can connect
+  Serial.println("[BOOT] ===== Wi-Fi Access Point =====");
+  Serial.printf("[BOOT]   Status  : %s\n", apOk ? "STARTED" : "FAILED");
+  Serial.printf("[BOOT]   SSID    : %s\n", AP_SSID);
+  Serial.printf("[BOOT]   Password: %s\n", AP_PASSWORD);
+  Serial.printf("[BOOT]   IP      : %s\n", WiFi.softAPIP().toString().c_str());
+  Serial.println("[BOOT] ==================================");
+  if (!apOk) Serial.println("[BOOT] WARNING: AP failed! Check password >= 8 chars.");
 
   // --- Web server routes -----------------------------------------------------
-  server.on("/",    handleRoot);
-  server.on("/set", handleSet);
+  server.on("/",       handleRoot);
+  server.on("/set",    handleSet);
+  server.on("/login",  handleLogin);
+  server.on("/pair",   handlePair);
+  server.on("/logout", handleLogout);
+  const char* hdrs[] = {"Cookie"};
+  server.collectHeaders(hdrs, 1);  // MUST be before begin() so Cookie header is read
   server.begin();
   Serial.println("[BOOT] HTTP server started");
 
@@ -226,14 +261,15 @@ void setup() {
   Serial.printf("[BOOT] NRF24 listening on CH=%d (%d MHz), pipe=\"%s\"\n",
                 RF_CHANNEL, 2400 + RF_CHANNEL, (char*)PIPE_ADDR);
 
-  // --- Ready splash ----------------------------------------------------------
+  // --- Ready splash (shows WiFi credentials so user knows what to enter) ---
   display.clearDisplay(); display.setCursor(0,0);
-  display.println("HeyTaps Ready");
-  display.print("WiFi: "); display.println(AP_SSID);
-  display.print("IP: ");   display.println(WiFi.softAPIP());
-  display.println("Waiting for data...");
+  display.setTextSize(1);
+  display.println("== HeyTaps Ready ==");
+  display.print("WiFi: ");    display.println(AP_SSID);
+  display.print("Pass: ");    display.println(AP_PASSWORD);
+  display.print("IP: ");      display.println(WiFi.softAPIP());
   display.display();
-  delay(1500);
+  delay(3000);  // show for 3 seconds so user can read it
 }
 
 // =============================================================================
@@ -253,18 +289,33 @@ void loop() {
   // --- Receive RF data -------------------------------------------------------
   if (radio.available()) {
     radio.read(&rxData, sizeof(rxData));
-    lastReceiveMillis = millis();
-    dataReceived      = true;
-    computedWater     = recalcWater();
 
-    Serial.printf("[RX] Dist=%dmm  Water=%d%%  Temp=%.1fC  Hum=%.1f%%  Muted=%s\n",
-                  rxData.distance_mm, computedWater,
-                  rxData.temperature, rxData.humidity,
-                  buzzerSilenced ? "YES" : "NO");
+    // Security gate: ONLY accept if device is paired AND devId matches exactly
+    char inId[13] = {0};
+    memcpy(inId, rxData.devId, 12);
 
-    updateLEDs(computedWater);
-    updateOLED();    // refresh current screen immediately on new data
-    checkBuzzer();
+    bool paired = devicePaired;
+    bool idMatch = (strncmp(inId, pairedId, 12) == 0);
+
+    if (!paired) {
+      // No device paired yet – ignore all incoming data
+      Serial.println("[SEC] Data blocked: no device paired. Use web portal to pair.");
+    } else if (!idMatch) {
+      // Wrong device ID – reject
+      Serial.printf("[SEC] Rejected unknown device ID: %s (expected: %s)\n", inId, pairedId);
+    } else {
+      // Authorised – process data
+      lastReceiveMillis = millis();
+      dataReceived      = true;
+      computedWater     = recalcWater();
+      Serial.printf("[RX] ID=%s Dist=%dmm Water=%d%% T=%.1fC H=%.1f%% Muted=%s\n",
+                    inId, rxData.distance_mm, computedWater,
+                    rxData.temperature, rxData.humidity,
+                    buzzerSilenced ? "Y" : "N");
+      updateLEDs(computedWater);
+      updateOLED();
+      checkBuzzer();
+    }
   }
 
   updateBuzzerTone();
@@ -387,7 +438,7 @@ void screenTemp() {
 
   display.setTextSize(2);
   display.setCursor(90, 20);
-  display.print("°C");
+  display.print("C");
 
   display.setTextSize(1);
   display.setCursor(0, 56);
@@ -626,6 +677,9 @@ const char HTML[] PROGMEM = R"html(
 //  WEB HANDLER – root
 // =============================================================================
 void handleRoot() {
+  if (!devicePaired) { server.sendHeader("Location","/pair");  server.send(302,"text/plain",""); return; }
+  if (!isAuthenticated()) { server.sendHeader("Location","/login"); server.send(302,"text/plain",""); return; }
+
   String page = HTML;
   unsigned long ago = (millis() - lastReceiveMillis) / 1000;
 
@@ -654,6 +708,7 @@ void handleRoot() {
 //  WEB HANDLER – save settings
 // =============================================================================
 void handleSet() {
+  if (!isAuthenticated()) { server.sendHeader("Location","/login"); server.send(302,"text/plain",""); return; }
   if (server.hasArg("low")) {
     lowThreshold = constrain(server.arg("low").toInt(), 0, 100);
     prefs.putInt("low", lowThreshold);
@@ -674,4 +729,109 @@ void handleSet() {
                 lowThreshold, highThreshold, tankEmpty_cm, tankFull_cm);
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "");
+}
+
+// =============================================================================
+// =============================================================================
+//  AUTH HELPER  –  simple server-side flag (reliable on local AP)
+// =============================================================================
+bool isAuthenticated() {
+  return webAuthenticated;
+}
+
+// =============================================================================
+//  LOGIN PAGE  –  user enters 12-char device code
+// =============================================================================
+void handleLogin() {
+  if (!devicePaired) { server.sendHeader("Location","/pair"); server.send(302,"text/plain",""); return; }
+
+  // Process submitted code
+  if (server.hasArg("code")) {
+    String code = server.arg("code");
+    code.toUpperCase();
+    code.trim();
+    if (code.length() == 12 && code.equals(String(pairedId))) {
+      webAuthenticated = true;  // grant access – no cookies needed
+      server.sendHeader("Location", "/");
+      server.send(302, "text/plain", "");
+      Serial.println("[SEC] Login successful – dashboard unlocked");
+      return;
+    } else {
+      Serial.println("[SEC] Login FAILED – wrong code");
+    }
+  }
+
+  // Show login form
+  String pg = "<!DOCTYPE html><html><head>"
+    "<meta charset=UTF-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>HeyTaps Login</title>"
+    "<style>*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:Arial,sans-serif;background:#0d1117;color:#e0e0e0;"
+    "display:flex;align-items:center;justify-content:center;height:100vh}"
+    ".box{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:32px 28px;width:320px;text-align:center}"
+    "h2{color:#00d4aa;margin-bottom:6px}p{color:#666;font-size:.82em;margin-bottom:20px}"
+    "input{width:100%;background:#0d1117;border:1px solid #21262d;color:#fff;"
+    "padding:10px;border-radius:7px;font-size:1.1em;letter-spacing:3px;text-align:center;margin-bottom:14px}"
+    "button{width:100%;background:#00d4aa;color:#0d1117;border:none;padding:10px;"
+    "border-radius:7px;font-weight:700;font-size:1em;cursor:pointer}"
+    "button:hover{background:#00aaff}.err{color:#ff6b6b;font-size:.82em;margin-bottom:10px}</style>"
+    "</head><body><div class=box>"
+    "<h2>HeyTaps</h2><p>Enter your 12-digit Device Code<br>set in the transmitter firmware</p>";
+  if (server.hasArg("code")) pg += "<p class=err>Incorrect code. Try again.</p>";
+  pg += "<form method=get action=/login>"
+    "<input name=code maxlength=12 placeholder='A1B2C3D4E5F6' autofocus>"
+    "<button type=submit>Unlock Dashboard</button></form></div></body></html>";
+  server.send(200, "text/html", pg);
+}
+
+// =============================================================================
+//  PAIR PAGE  –  first-time setup, stores device ID in NVS
+// =============================================================================
+void handlePair() {
+  if (server.hasArg("code")) {
+    String code = server.arg("code");
+    code.toUpperCase(); code.trim();
+    if (code.length() == 12) {
+      code.toCharArray(pairedId, 13);
+      prefs.putString("pairedid", code);
+      devicePaired = true;
+      Serial.printf("[SEC] Device paired: %s\n", pairedId);
+      server.sendHeader("Location", "/login");
+      server.send(302, "text/plain", "");
+      return;
+    }
+  }
+
+  String pg = "<!DOCTYPE html><html><head>"
+    "<meta charset=UTF-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>HeyTaps – Pair Device</title>"
+    "<style>*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:Arial,sans-serif;background:#0d1117;color:#e0e0e0;"
+    "display:flex;align-items:center;justify-content:center;height:100vh}"
+    ".box{background:#161b22;border:1px solid #21262d;border-radius:14px;padding:32px 28px;width:340px;text-align:center}"
+    "h2{color:#00d4aa;margin-bottom:6px}.step{background:#0d1117;border-radius:8px;padding:12px;"
+    "font-size:.82em;color:#aaa;text-align:left;margin-bottom:18px;line-height:1.7}"
+    "input{width:100%;background:#0d1117;border:1px solid #21262d;color:#fff;"
+    "padding:10px;border-radius:7px;font-size:1.1em;letter-spacing:3px;text-align:center;margin-bottom:14px}"
+    "button{width:100%;background:#00d4aa;color:#0d1117;border:none;padding:10px;"
+    "border-radius:7px;font-weight:700;cursor:pointer}button:hover{background:#00aaff}</style>"
+    "</head><body><div class=box>"
+    "<h2>Pair New Device</h2>"
+    "<div class=step>Enter the 12-character <b>DEVICE ID</b> defined in<br>"
+    "the transmitter code (<b>DEVICE_ID</b> in esp32c3.ino)<br>"
+    "then click Pair to unlock this receiver.</div>"
+    "<form method=get action=/pair>"
+    "<input name=code maxlength=12 placeholder='A1B2C3D4E5F6' autofocus>"
+    "<button type=submit>Pair &amp; Continue</button></form></div></body></html>";
+  server.send(200, "text/html", pg);
+}
+
+// =============================================================================
+//  LOGOUT  –  clear session
+// =============================================================================
+void handleLogout() {
+  webAuthenticated = false;
+  server.sendHeader("Location", "/login");
+  server.send(302, "text/plain", "");
+  Serial.println("[SEC] User logged out");
 }
