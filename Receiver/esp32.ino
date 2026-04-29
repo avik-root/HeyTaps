@@ -129,6 +129,12 @@ bool          lastBtnState       = HIGH;
 unsigned long lastDebounceMs     = 0;
 const unsigned long DEBOUNCE_MS  = 50;
 
+// --- OLED screen cycling ---
+// Screens: 0=Main  1=Temperature  2=Humidity  3=Bar Graph  4=Numerical
+uint8_t       currentScreen      = 0;
+unsigned long lastScreenSwitch   = 0;
+const unsigned long SCREEN_MS    = 3000; // 3 seconds per screen
+
 // =============================================================================
 //  FORWARD DECLARATIONS
 // =============================================================================
@@ -136,6 +142,11 @@ uint8_t recalcWater();
 void    handleButton();
 void    updateLEDs(uint8_t pct);
 void    updateOLED();
+void    screenMain();
+void    screenTemp();
+void    screenHumid();
+void    screenBarGraph();
+void    screenNumerical();
 void    checkBuzzer();
 void    updateBuzzerTone();
 void    handleRoot();
@@ -231,6 +242,13 @@ void loop() {
   server.handleClient();
   handleButton();
 
+  // --- Auto-advance OLED screen every SCREEN_MS ms --------------------------
+  if (millis() - lastScreenSwitch >= SCREEN_MS) {
+    lastScreenSwitch = millis();
+    currentScreen = (currentScreen + 1) % 5;
+    updateOLED();
+  }
+
   // --- Receive RF data -------------------------------------------------------
   if (radio.available()) {
     radio.read(&rxData, sizeof(rxData));
@@ -244,16 +262,17 @@ void loop() {
                   buzzerSilenced ? "YES" : "NO");
 
     updateLEDs(computedWater);
-    updateOLED();
+    updateOLED();    // refresh current screen immediately on new data
     checkBuzzer();
   }
 
   updateBuzzerTone();
 
-  // --- No-signal warning (30s timeout) ---------------------------------------
+  // --- No-signal warning (30s timeout) – overrides screen cycling ------------
   if (dataReceived && (millis() - lastReceiveMillis > 30000UL)) {
     unsigned long ago = (millis() - lastReceiveMillis) / 1000;
     display.clearDisplay(); display.setCursor(0,0);
+    display.setTextSize(1);
     display.println("!! NO SIGNAL !!");
     display.println("Check transmitter");
     display.print("Last: "); display.print(ago); display.println("s ago");
@@ -293,6 +312,179 @@ void handleButton() {
     }
   }
   lastBtnState = reading;
+}
+
+// =============================================================================
+//  OLED – dispatcher
+// =============================================================================
+void updateOLED() {
+  switch (currentScreen) {
+    case 0: screenMain();      break;
+    case 1: screenTemp();      break;
+    case 2: screenHumid();     break;
+    case 3: screenBarGraph();  break;
+    case 4: screenNumerical(); break;
+    default: screenMain();     break;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Screen 0: MAIN – all values at a glance
+// -----------------------------------------------------------------------------
+void screenMain() {
+  display.clearDisplay();
+  display.setTextSize(1);
+
+  // Header with screen indicator dots
+  display.setCursor(0, 0);
+  display.print("HeyTaps ");
+  display.print("[1/5]");
+
+  // Water % – medium
+  display.setTextSize(2);
+  display.setCursor(0, 12);
+  display.print(computedWater);
+  display.print("%");
+
+  // Right column – small stats
+  display.setTextSize(1);
+  display.setCursor(68, 12);
+  display.print("D:"); display.print(rxData.distance_mm); display.println("mm");
+  display.setCursor(68, 22);
+  display.print("T:"); display.print(rxData.temperature, 1); display.println("C");
+  display.setCursor(68, 32);
+  display.print("H:"); display.print(rxData.humidity, 1); display.println("%");
+
+  // Mini bar graph
+  display.drawRect(0, 44, 126, 8, SSD1306_WHITE);
+  uint8_t fill = (uint8_t)((computedWater / 100.0f) * 124);
+  if (fill > 0) display.fillRect(1, 45, fill, 6, SSD1306_WHITE);
+
+  // Status line
+  display.setCursor(0, 56);
+  display.setTextSize(1);
+  if (buzzerSilenced)                              display.print("ALARM MUTED");
+  else if (computedWater <= (uint8_t)lowThreshold) display.print("!! LOW WATER");
+  else if (computedWater >= (uint8_t)highThreshold)display.print("!! OVERFLOW");
+  else                                             display.print("Level: OK");
+
+  display.display();
+}
+
+// -----------------------------------------------------------------------------
+// Screen 1: TEMPERATURE – big font
+// -----------------------------------------------------------------------------
+void screenTemp() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("TEMPERATURE [2/5]");
+
+  display.setTextSize(3);
+  display.setCursor(8, 16);
+  display.print(rxData.temperature, 1);
+
+  display.setTextSize(2);
+  display.setCursor(90, 20);
+  display.print("C");
+
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("DHT11 Sensor");
+  display.display();
+}
+
+// -----------------------------------------------------------------------------
+// Screen 2: HUMIDITY – big font
+// -----------------------------------------------------------------------------
+void screenHumid() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("HUMIDITY    [3/5]");
+
+  display.setTextSize(3);
+  display.setCursor(8, 16);
+  display.print(rxData.humidity, 1);
+
+  display.setTextSize(2);
+  display.setCursor(96, 20);
+  display.print("%");
+
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print("DHT11 Sensor");
+  display.display();
+}
+
+// -----------------------------------------------------------------------------
+// Screen 3: WATER LEVEL – large bar graph
+// -----------------------------------------------------------------------------
+void screenBarGraph() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("WATER LEVEL [4/5]");
+
+  // Outer border
+  display.drawRect(4, 12, 120, 36, SSD1306_WHITE);
+  // Fill proportional to water level
+  uint8_t barW = (uint8_t)((computedWater / 100.0f) * 118);
+  if (barW > 0) display.fillRect(5, 13, barW, 34, SSD1306_WHITE);
+
+  // Percentage label centred over bar
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(2);
+  display.setCursor(42, 20);
+  if (barW < 50) {                          // text outside bar when nearly empty
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(42, 20);
+  }
+  display.print(computedWater);
+  display.print("%");
+  display.setTextColor(SSD1306_WHITE);
+
+  // Scale marks: 25 / 50 / 75
+  display.setTextSize(1);
+  display.setCursor(27, 52);  display.print("25");
+  display.setCursor(57, 52);  display.print("50");
+  display.setCursor(87, 52);  display.print("75");
+  display.drawFastVLine(34,  48, 4, SSD1306_WHITE);
+  display.drawFastVLine(64,  48, 4, SSD1306_WHITE);
+  display.drawFastVLine(94,  48, 4, SSD1306_WHITE);
+
+  display.display();
+}
+
+// -----------------------------------------------------------------------------
+// Screen 4: WATER LEVEL – numerical only, huge font
+// -----------------------------------------------------------------------------
+void screenNumerical() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("WATER LEVEL [5/5]");
+
+  display.setTextSize(4);
+  // Centre the number
+  uint8_t digits = computedWater < 10 ? 1 : (computedWater < 100 ? 2 : 3);
+  int16_t x = (128 - digits * 24) / 2;
+  display.setCursor(x, 14);
+  display.print(computedWater);
+
+  display.setTextSize(2);
+  display.setCursor(92, 24);
+  display.print("%");
+
+  display.setTextSize(1);
+  display.setCursor(0, 56);
+  display.print(rxData.distance_mm);
+  display.print("mm  ");
+  if (buzzerSilenced)                               display.print("MUTED");
+  else if (computedWater <= (uint8_t)lowThreshold)  display.print("LOW!");
+  else if (computedWater >= (uint8_t)highThreshold) display.print("FULL!");
+  else                                              display.print("OK");
+  display.display();
 }
 
 // =============================================================================
