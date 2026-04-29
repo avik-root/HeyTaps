@@ -99,7 +99,7 @@ Preferences        prefs;
 //  WI-FI ACCESS POINT
 // =============================================================================
 const char* AP_SSID     = "HeyTaps";
-const char* AP_PASSWORD = "12345678";
+const char* AP_PASSWORD = "savewater";
 IPAddress   AP_IP(192, 168, 4, 1);
 
 // =============================================================================
