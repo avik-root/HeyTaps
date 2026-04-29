@@ -387,7 +387,7 @@ void screenTemp() {
 
   display.setTextSize(2);
   display.setCursor(90, 20);
-  display.print("C");
+  display.print("°C");
 
   display.setTextSize(1);
   display.setCursor(0, 56);
