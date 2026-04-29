@@ -497,46 +497,7 @@ void updateLEDs(uint8_t pct) {
   digitalWrite(LED_BLUE,   pct >= 75                 ? HIGH : LOW);
 }
 
-// =============================================================================
-//  OLED UPDATE
-// =============================================================================
-void updateOLED() {
-  display.clearDisplay();
 
-  // Title
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("=== HeyTaps ===");
-
-  // Water % – large
-  display.setTextSize(2);
-  display.setCursor(0, 12);
-  display.print(computedWater);
-  display.print("%");
-
-  // Sensor stats – right column
-  display.setTextSize(1);
-  display.setCursor(66, 12);
-  display.print("D:"); display.print(rxData.distance_mm); display.println("mm");
-  display.setCursor(66, 22);
-  display.print("T:"); display.print(rxData.temperature, 1); display.println("C");
-  display.setCursor(66, 32);
-  display.print("H:"); display.print(rxData.humidity, 1); display.println("%");
-
-  // Status bar
-  display.setCursor(0, 50);
-  if (buzzerSilenced) {
-    display.println("ALARM MUTED     ");
-  } else if (computedWater <= (uint8_t)lowThreshold) {
-    display.println("!! LOW WATER !!");
-  } else if (computedWater >= (uint8_t)highThreshold) {
-    display.println("!! OVERFLOW !!  ");
-  } else {
-    display.println("Level: OK       ");
-  }
-
-  display.display();
-}
 
 // =============================================================================
 //  BUZZER LOGIC
