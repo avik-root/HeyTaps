@@ -5,14 +5,14 @@
 #include <WebServer.h>
 #include <Preferences.h>
 
-#define CE_PIN    3
-#define CSN_PIN   10
-#define SCK_PIN   4
-#define MISO_PIN  5
-#define MOSI_PIN  6
-#define TRIG_PIN  1
-#define ECHO_PIN  2
-#define DHT_PIN   0
+#define CE_PIN    4
+#define CSN_PIN   5
+#define SCK_PIN   18
+#define MISO_PIN  19
+#define MOSI_PIN  23
+#define TRIG_PIN  12
+#define ECHO_PIN  14
+#define DHT_PIN   27
 #define DHT_TYPE  DHT11
 
 const uint8_t RF_CHANNEL = 108;

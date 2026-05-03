@@ -19,7 +19,7 @@
 - [System Architecture](#system-architecture)
 - [Hardware Components](#hardware-components)
 - [Pin Connection Tables](#pin-connection-tables)
-  - [Transceiver (T1) – ESP32-C3 Super Mini](#transceiver-t1--esp32-c3-super-mini)
+  - [Transceiver (T1) – ESP32 (38-pin DevKit)](#transceiver-t1--esp32-38-pin-devkit)
   - [Receiver (R1) – ESP32 (38-pin DevKit)](#receiver-r1--esp32-38-pin-devkit)
 - [Security & Handshake](#security--handshake)
 - [Initial Setup (Pairing)](#initial-setup-pairing)
@@ -35,7 +35,7 @@
 ```
 ┌──────────────────────────────────┐        E2E Encrypted Handshake        ┌────────────────────────────────────────┐
 │        TRANSCEIVER (T1)          │ ─────────────────────────────────▶ │           RECEIVER (R1)                │
-│      ESP32-C3 Super Mini         │ ◀───────────────────────────────── │         ESP32 38-pin DevKit            │
+│       ESP32 38-pin DevKit        │ ◀───────────────────────────────── │         ESP32 38-pin DevKit            │
 │        AP: "HeyTaps T1"          │      250 kbps | Dynamic Pipes      │          AP: "HeyTap R1"               │
 │                                  │                                     │                                        │
 │  ┌─────────────┐                 │                                     │  ┌──────────────┐  ┌──────────────┐   │
@@ -55,8 +55,7 @@
 
 | Qty | Component | Role |
 |-----|-----------|------|
-| 1 | **ESP32-C3 Super Mini** | Transceiver MCU (T1) |
-| 1 | **ESP32 38-pin DevKit** (or Wroom-32) | Receiver MCU (R1) |
+| 2 | **ESP32 38-pin DevKit** (or Wroom-32) | Transceiver (T1) & Receiver (R1) |
 | 2 | **NRF24L01+ with PA+LNA** | 2.4 GHz wireless link |
 | 1 | **HC-SR04** Ultrasonic Module | Distance measurement (tank level) |
 | 1 | **DHT11** Temperature & Humidity Sensor | Environmental sensing |
@@ -72,33 +71,33 @@
 
 ## Pin Connection Tables
 
-### Transceiver (T1) – ESP32-C3 Super Mini
+### Transceiver (T1) – ESP32 (38-pin DevKit)
 
-#### NRF24L01+ → ESP32-C3
-| NRF24L01+ Pin | ESP32-C3 Pin | Notes |
-|---------------|-------------|-------|
+#### NRF24L01+ → ESP32
+| NRF24L01+ Pin | ESP32 Pin | Notes |
+|---------------|-----------|-------|
 | VCC | 3V3 | **3.3 V only** – add 100 µF cap |
 | GND | GND | Common ground |
-| CE | GPIO **3** | Chip Enable |
-| CSN | GPIO **10** | SPI Chip Select |
-| SCK | GPIO **4** | SPI Clock |
-| MOSI | GPIO **6** | SPI Data Out |
-| MISO | GPIO **5** | SPI Data In |
+| CE | GPIO **4** | Chip Enable |
+| CSN | GPIO **5** | SPI Chip Select |
+| SCK | GPIO **18** | VSPI Clock |
+| MOSI | GPIO **23** | VSPI MOSI |
+| MISO | GPIO **19** | VSPI MISO |
 
-#### HC-SR04 Ultrasonic → ESP32-C3
-| HC-SR04 Pin | ESP32-C3 Pin | Notes |
-|-------------|-------------|-------|
-| VCC | **5V** (VBUS)| Requires 5 V supply |
+#### HC-SR04 Ultrasonic → ESP32
+| HC-SR04 Pin | ESP32 Pin | Notes |
+|-------------|-----------|-------|
+| VCC | **5V** (VIN/VBUS)| Requires 5 V supply |
 | GND | GND | Common ground |
-| TRIG | GPIO **1** | 10 µs trigger pulse output |
-| ECHO | GPIO **2** | PWM echo input |
+| TRIG | GPIO **12** | Trigger pulse output |
+| ECHO | GPIO **14** | PWM echo input |
 
-#### DHT11 → ESP32-C3
-| DHT11 Pin | ESP32-C3 Pin | Notes |
-|-----------|-------------|-------|
+#### DHT11 → ESP32
+| DHT11 Pin | ESP32 Pin | Notes |
+|-----------|-----------|-------|
 | VCC | 3V3 | Also works at 5 V |
 | GND | GND | — |
-| DATA | GPIO **0** | 10 kΩ pull-up to VCC recommended |
+| DATA | GPIO **27** | 10 kΩ pull-up to VCC recommended |
 
 ---
 
@@ -193,7 +192,7 @@ Install via **Arduino IDE → Tools → Manage Libraries**:
 
 ### Board Definitions
 Ensure you have the `esp32 by Espressif Systems` board package installed.
-- **Transceiver:** Select `ESP32C3 Dev Module`
+- **Transceiver:** Select `ESP32 Dev Module`
 - **Receiver:** Select `ESP32 Dev Module`
 
 ---
@@ -203,9 +202,9 @@ Ensure you have the `esp32 by Espressif Systems` board package installed.
 ```
 HeyTaps/
 ├── Transceiver/
-│   └── esp32_T1_v1.ino   ← Transceiver firmware (ESP32-C3 Super Mini)
+│   └── esp32_T1_v1.ino   ← Transceiver firmware (ESP32)
 ├── Receiver/
-│   └── esp32_R1_v1.ino   ← Receiver firmware (ESP32 38-pin DevKit)
+│   └── esp32_R1_v1.ino   ← Receiver firmware (ESP32)
 └── README.md             ← This documentation file
 ```
 
