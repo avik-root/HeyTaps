@@ -45,8 +45,10 @@
 │  ┌─────────────┐                 │    float temperature;               │  ┌──────────────┐  ┌──────────────┐   │
 │  │   DHT11     │ Temp + Hum ─────│    float humidity;                  │  │  4× LEDs     │  │   Buzzer     │   │
 │  └─────────────┘                 │    uint16_t distance_mm;            │  │  R/Y/G/B     │  │   Alarm      │   │
-└──────────────────────────────────┘    uint8_t msgType;                 │  └──────────────┘  └──────────────┘   │
-                                      }                                  └────────────────────────────────────────┘
+│  ┌─────────────┐                 │    uint8_t msgType;                 │  └──────────────┘  └──────────────┘   │
+│  │ SSD1306 OLED│ ◀─── ACK ───────│                                     └────────────────────────────────────────┘
+│  │ & 4× LEDs   │                 │  }                                  
+└──────────────────────────────────┘                                     
 ```
 
 ---
@@ -59,10 +61,10 @@
 | 2 | **NRF24L01+ with PA+LNA** | 2.4 GHz wireless link |
 | 1 | **HC-SR04** Ultrasonic Module | Distance measurement (tank level) |
 | 1 | **DHT11** Temperature & Humidity Sensor | Environmental sensing |
-| 1 | **SSD1306 OLED** 128×64 I2C | Receiver display |
-| 4 | **5mm LEDs** (Red / Yellow / Green / Blue) | Water level indicators |
-| 4 | **220 Ω resistors** | LED current limiting |
-| 1 | **5V Active Buzzer** | Alarm output |
+| 2 | **SSD1306 OLED** 128×64 I2C | System display (Both T1 & R1) |
+| 8 | **5mm LEDs** (Red / Yellow / Green / Blue) | Water level indicators (4 per board) |
+| 8 | **220 Ω resistors** | LED current limiting |
+| 1 | **5V Active Buzzer** | Alarm output (R1) |
 | 2 | **100 µF electrolytic capacitors** | NRF24L01 power decoupling |
 
 > **⚡ Power Note:** The NRF24L01+ module runs on **3.3 V only**. Place a **100 µF capacitor** across its VCC and GND pins as close to the module as possible to prevent voltage drooping during transmission bursts.
@@ -98,6 +100,22 @@
 | VCC | 3V3 | Also works at 5 V |
 | GND | GND | — |
 | DATA | GPIO **27** | 10 kΩ pull-up to VCC recommended |
+
+#### SSD1306 OLED → ESP32
+| OLED Pin | ESP32 Pin | Notes |
+|----------|-----------|-------|
+| VCC | 3V3 | — |
+| GND | GND | — |
+| SDA | GPIO **21** | I2C Data (default) |
+| SCL | GPIO **22** | I2C Clock (default) |
+
+#### LEDs → ESP32
+| Component | ESP32 Pin | Notes |
+|-----------|-----------|-------|
+| 🔴 Red LED | GPIO **32** | Critical (< 25%) |
+| 🟡 Yellow LED | GPIO **33** | Low (25–49%) |
+| 🟢 Green LED | GPIO **25** | Good (50–74%) |
+| 🔵 Blue LED | GPIO **26** | Full (≥ 75%) |
 
 ---
 
