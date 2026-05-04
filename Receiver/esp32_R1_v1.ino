@@ -9,6 +9,9 @@
 
 #define CE_PIN      4
 #define CSN_PIN     5
+#define SCK_PIN     18
+#define MISO_PIN    19
+#define MOSI_PIN    23
 #define SCREEN_W    128
 #define SCREEN_H     64
 #define LED_RED     32
@@ -17,6 +20,7 @@
 #define LED_BLUE    26
 #define BUZZER_PIN  27
 #define BUTTON_PIN  14
+#define PUMP_PIN    2
 
 const uint8_t RF_CHANNEL = 108;
 
@@ -59,6 +63,7 @@ int beepInterval = 500;
 bool beepOn = false;
 
 bool lastBtnState = HIGH;
+bool btnState = HIGH;
 unsigned long lastDebounceMs = 0;
 const unsigned long DEBOUNCE_MS = 50;
 
@@ -66,25 +71,46 @@ uint8_t currentScreen = 0;
 unsigned long lastScreenSwitch = 0;
 const unsigned long SCREEN_DURATIONS[5] = {15000, 4000, 4000, 4000, 4000};
 
+bool pumpEnabled = false;
+int pumpStartLevel = 20;
+bool pumpState = false;
+
 const char CSS[] PROGMEM = R"(
-body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#f8fafc;padding:20px;max-width:600px;margin:auto}
-.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px;margin-bottom:20px}
-h1{color:#38bdf8;font-size:1.6em;margin-bottom:5px}
-h2{color:#e2e8f0;font-size:1.2em;margin-bottom:15px;border-bottom:1px solid #334155;padding-bottom:10px}
-.btn{display:block;width:100%;padding:12px;background:#0ea5e9;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:1em;cursor:pointer;margin-top:10px;text-align:center;text-decoration:none;box-sizing:border-box}
-.btn:hover{background:#0284c7}
-.btn-danger{background:#ef4444}
-.btn-danger:hover{background:#dc2626}
-input{width:100%;background:#0f172a;border:1px solid #475569;color:#fff;padding:12px;border-radius:8px;font-size:1em;margin-bottom:15px;box-sizing:border-box}
-label{display:block;color:#cbd5e1;margin-bottom:8px;font-size:0.9em}
-.badge{display:inline-block;padding:5px 10px;border-radius:20px;font-size:0.85em;background:#166534;color:#4ade80}
-.badge.err{background:#7f1d1d;color:#f87171}
-.code{font-family:monospace;font-size:1.4em;letter-spacing:2px;color:#fcd34d;background:#000;padding:10px;border-radius:8px;text-align:center;display:block;margin-bottom:15px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}
-.val-box{background:#0f172a;padding:15px;border-radius:8px;text-align:center;border:1px solid #334155}
-.val-box .val{font-size:1.5em;font-weight:bold;color:#38bdf8}
-.val-box .lbl{font-size:0.8em;color:#94a3b8;text-transform:uppercase;margin-top:5px}
-p{line-height:1.6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#e0e0e0;padding:20px;max-width:600px;margin:auto}
+h1{color:#00d4aa;font-size:1.5em;margin-bottom:2px}
+.sub{color:#555;font-size:.8em;margin-bottom:20px}
+/* --- Water bar --- */
+.bar-wrap{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;margin-bottom:16px}
+.bar-bg{background:#21262d;border-radius:8px;height:30px;overflow:hidden}
+.bar-fill{height:100%;border-radius:8px;background:linear-gradient(90deg,#00d4aa,#00aaff);transition:width .6s}
+.bar-lbl{display:flex;justify-content:space-between;font-size:.78em;color:#555;margin-top:6px}
+/* --- Cards --- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:16px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:14px;text-align:center}
+.card .val{font-size:2em;font-weight:700;color:#00d4aa}
+.card .lbl{font-size:.72em;color:#777;margin-top:4px}
+/* --- Status badge --- */
+.badge{display:inline-block;padding:4px 14px;border-radius:20px;font-size:.8em;margin-bottom:14px;font-weight:600}
+.ok  {background:#0d2818;color:#00d4aa;border:1px solid #00d4aa}
+.warn{background:#2d1212;color:#ff6b6b;border:1px solid #ff6b6b}
+/* --- Forms --- */
+.panel{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;margin-bottom:12px}
+.panel h2{color:#00aaff;font-size:.95em;margin-bottom:10px}
+.panel p.hint{font-size:.75em;color:#555;margin-bottom:10px;line-height:1.4}
+.row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.row label{font-size:.83em;color:#aaa}
+.row input{background:#0d1117;border:1px solid #21262d;color:#fff;padding:6px 10px;border-radius:6px;width:90px;font-size:.9em}
+.btn{display:block;width:100%;padding:9px;background:#00d4aa;color:#0d1117;border:none;border-radius:7px;font-weight:700;font-size:.9em;cursor:pointer;margin-top:4px}
+.btn:hover{background:#00aaff}
+.btn-danger{background:#ff6b6b}
+.btn-danger:hover{background:#fa5252}
+.ago{font-size:.75em;color:#444;margin-bottom:14px}
+.code{font-family:monospace;font-size:1.2em;letter-spacing:2px;color:#00d4aa;background:#0d1117;padding:10px;border-radius:6px;text-align:center;display:block;margin-bottom:15px;border:1px solid #21262d}
+.full-input{width:100% !important;margin-bottom:10px;box-sizing:border-box}
+.footer{text-align:center;font-size:.72em;color:#555;margin-top:20px}
+a{color:#00aaff;text-decoration:none}
+a:hover{text-decoration:underline}
 )";
 
 void screenMain();
@@ -153,14 +179,19 @@ void updateBuzzerTone() {
 
 void handleButton() {
   bool reading = digitalRead(BUTTON_PIN);
-  if (reading != lastBtnState) lastDebounceMs = millis();
+  if (reading != lastBtnState) {
+    lastDebounceMs = millis();
+  }
   if ((millis() - lastDebounceMs) > DEBOUNCE_MS) {
-    if (reading == LOW && lastBtnState == HIGH) {
-      buzzerSilenced = !buzzerSilenced;
-      if (buzzerSilenced) {
-        digitalWrite(BUZZER_PIN, LOW);
-        buzzerActive = false;
-        beepOn = false;
+    if (reading != btnState) {
+      btnState = reading;
+      if (btnState == LOW) {
+        buzzerSilenced = !buzzerSilenced;
+        if (buzzerSilenced) {
+          digitalWrite(BUZZER_PIN, LOW);
+          buzzerActive = false;
+          beepOn = false;
+        }
       }
     }
   }
@@ -173,59 +204,92 @@ void handleRoot() {
   sprintf(pIdStr, "%08X", pairedId);
   unsigned long ago = dataReceived ? (millis() - lastReceiveMillis) / 1000 : 0;
   
-  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  if(isPaired) html += "<meta http-equiv='refresh' content='5'>";
-  html += "<title>R1 Dashboard</title><style>";
+  String html = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  if(isPaired) html += "<meta http-equiv='refresh' content='10'>";
+  html += "<title>HeyTaps – Water Tank Monitor</title><style>";
   html += CSS;
-  html += "</style></head><body><div class='card'><h1>HeyTaps Receiver (R1)</h1>";
-  html += "<a href='/docs' style='color:#38bdf8;font-size:0.9em;display:inline-block;margin-bottom:15px'>Read Documentation</a>";
+  html += "</style></head><body>";
+  
+  html += "<h1>HeyTaps Monitor</h1>";
+  html += "<p class='sub'>Receiver Dashboard &middot; <a href='/docs'>Documentation</a></p>";
   
   if (isPaired) {
-    if (dataReceived && ago < 30) html += "<p><span class='badge'>Signal: Connected</span></p>";
-    else html += "<p><span class='badge err'>Signal: Lost / No Data</span></p>";
+    String badgeClass = (dataReceived && ago < 30) ? "ok" : "warn";
+    String badgeText = (dataReceived && ago < 30) ? "Signal: Connected" : "Signal: Lost / No Data";
     
+    html += "<div class='bar-wrap'>";
+    html += "<div class='bar-bg'><div class='bar-fill' style='width:" + String(computedWater) + "%'></div></div>";
+    html += "<div class='bar-lbl'><span>0%</span><span>Water: <b>" + String(computedWater) + "%</b> (" + String(lastData.distance_mm) + " mm)</span><span>100%</span></div>";
+    html += "</div>";
+
+    html += "<span class='badge " + badgeClass + "'>" + badgeText + "</span>";
+    html += "<p class='ago'>Last update: " + String(ago) + " seconds ago</p>";
+
     html += "<div class='grid'>";
-    html += "<div class='val-box'><div class='val'>" + String(computedWater) + "%</div><div class='lbl'>Water Level</div></div>";
-    html += "<div class='val-box'><div class='val'>" + String(lastData.distance_mm) + "mm</div><div class='lbl'>Distance</div></div>";
-    html += "<div class='val-box'><div class='val'>" + String(lastData.temperature, 1) + "&deg;C</div><div class='lbl'>Temperature</div></div>";
-    html += "<div class='val-box'><div class='val'>" + String(lastData.humidity, 1) + "%</div><div class='lbl'>Humidity</div></div>";
-    html += "</div><p style='text-align:center;color:#64748b;font-size:0.8em;margin-top:15px'>Last update: " + String(ago) + "s ago</p>";
+    html += "<div class='card'><div class='val'>" + String(computedWater) + "%</div><div class='lbl'>Water Level</div></div>";
+    html += "<div class='card'><div class='val'>" + String(lastData.distance_mm) + "mm</div><div class='lbl'>Distance</div></div>";
+    html += "<div class='card'><div class='val'>" + String(lastData.temperature, 1) + "&deg;C</div><div class='lbl'>Temperature</div></div>";
+    html += "<div class='card'><div class='val'>" + String(lastData.humidity, 1) + "%</div><div class='lbl'>Humidity</div></div>";
+    html += "</div>";
   } else {
-    html += "<p><span class='badge err'>Status: Not Paired</span></p>";
+    html += "<span class='badge warn'>Status: Not Paired</span>";
+    html += "<p class='ago'>Awaiting Transceiver Pairing</p>";
   }
-  html += "</div>";
-
-  html += "<div class='card'><h2>Pair Device</h2><form action='/pair' method='POST'>";
-  html += "<label>Your Device Code</label><span class='code'>" + String(myIdStr) + "</span>";
-  if(isPaired) html += "<label>Paired Transceiver Code</label><span class='code'>" + String(pIdStr) + "</span>";
-  html += "<label>Update Transceiver Code</label><input type='text' name='code' maxlength='8' placeholder='e.g. A1B2C3D4' required>";
-  html += "<button type='submit' class='btn'>Save Pairing</button></form></div>";
-
-  html += "<div class='card'><h2>Calibration</h2><form action='/calib' method='POST'>";
-  html += "<label>Empty Distance (cm)</label><input type='number' step='0.1' name='empty' value='" + String(tankEmpty_cm) + "'>";
-  html += "<label>Full Distance (cm)</label><input type='number' step='0.1' name='full' value='" + String(tankFull_cm) + "'>";
-  html += "<label>Low Alarm (%)</label><input type='number' name='low' value='" + String(lowThreshold) + "'>";
-  html += "<label>High Alarm (%)</label><input type='number' name='high' value='" + String(highThreshold) + "'>";
-  html += "<button type='submit' class='btn'>Save Calibration</button></form></div>";
   
-  html += "<div class='card'><h2>System Settings</h2><form action='/settings' method='POST'>";
-  html += "<label>Change Wi-Fi Password</label><input type='text' name='pass' minlength='8' placeholder='New Password' required>";
-  html += "<button type='submit' class='btn'>Update Password</button></form>";
-  html += "<form action='/reset' method='POST' onsubmit='return confirm(\"Hard reset device?\")'><button type='submit' class='btn btn-danger'>Hard Reset</button></form></div>";
+  html += "<form action='/pair' method='POST'>";
+  html += "<div class='panel'><h2>Pairing & Security</h2>";
+  html += "<div class='row'><label>Your Device Code:</label><div style='color:#00d4aa;font-family:monospace'>" + String(myIdStr) + "</div></div>";
+  if(isPaired) html += "<div class='row'><label>Paired Code:</label><div style='color:#00d4aa;font-family:monospace'>" + String(pIdStr) + "</div></div>";
+  html += "<input type='text' name='code' maxlength='8' placeholder='Enter Transceiver Code' class='full-input' required>";
+  html += "<button class='btn' type='submit'>Save Pairing</button>";
+  html += "</div></form>";
+
+  html += "<form action='/calib' method='POST'>";
+  html += "<div class='panel'><h2>Tank Calibration & Alarms</h2>";
+  html += "<p class='hint'>Mount HC-SR04 at the TOP of tank pointing DOWN.</p>";
+  html += "<div class='row'><label>Empty Dist (cm):</label><input type='number' name='empty' min='1' max='500' step='0.1' value='" + String(tankEmpty_cm) + "'></div>";
+  html += "<div class='row'><label>Full Dist (cm):</label><input type='number' name='full' min='1' max='500' step='0.1' value='" + String(tankFull_cm) + "'></div>";
+  html += "<div class='row'><label>Low Alert (%):</label><input type='number' name='low' min='0' max='100' value='" + String(lowThreshold) + "'></div>";
+  html += "<div class='row'><label>High Alert (%):</label><input type='number' name='high' min='0' max='100' value='" + String(highThreshold) + "'></div>";
+  html += "<button class='btn' type='submit'>Save Calibration</button>";
+  html += "</div></form>";
+  
+  html += "<form action='/pump' method='POST'>";
+  html += "<div class='panel'><h2>Pump Control</h2>";
+  html += "<p class='hint'>If enabled, pump turns ON below the Start Level, and OFF at the High Alert level.</p>";
+  html += "<div class='row'><label>Current State:</label><span class='badge " + String(pumpState?"ok":"warn") + "' style='margin:0'>" + String(pumpState?"PUMP ON":"PUMP OFF") + "</span></div>";
+  html += "<div class='row'><label>System:</label><select name='enabled' class='full-input' style='width:120px;margin:0;background:#0d1117;color:#fff;border:1px solid #21262d;padding:6px;border-radius:6px;'>";
+  html += "<option value='0'" + String(!pumpEnabled?" selected":"") + ">Disabled</option>";
+  html += "<option value='1'" + String(pumpEnabled?" selected":"") + ">Enabled</option>";
+  html += "</select></div>";
+  html += "<div class='row'><label>Start Pump Below (%):</label><input type='number' name='startLvl' min='0' max='100' value='" + String(pumpStartLevel) + "'></div>";
+  html += "<button class='btn' type='submit'>Save Pump Settings</button>";
+  html += "</div></form>";
+  
+  html += "<form action='/settings' method='POST'>";
+  html += "<div class='panel'><h2>System Settings</h2>";
+  html += "<input type='text' name='pass' minlength='8' placeholder='New Wi-Fi Password' class='full-input' required>";
+  html += "<button class='btn' type='submit'>Update Password</button>";
+  html += "</div></form>";
+
+  html += "<form action='/reset' method='POST' onsubmit='return confirm(\"Hard reset device? This removes pairings and calibration.\")'>";
+  html += "<div class='panel'><button class='btn btn-danger' type='submit'>Hard Reset System</button></div></form>";
+
+  html += "<p class='footer'>Connect to Wi-Fi <b>HeyTap R1</b> &bull; Password: <b>" + apPass + "</b> &bull; IP: 192.168.4.1</p>";
 
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
 
 void handleDocs() {
-  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Documentation</title><style>";
+  String html = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Documentation</title><style>";
   html += CSS;
-  html += "</style></head><body><div class='card'><h1>HeyTaps System Architecture & Documentation</h1>";
-  html += "<h2>1. Hardware Overview</h2><p><b>Transceiver (T1):</b> ESP32-C3 Super Mini, HC-SR04 Ultrasonic, DHT11, NRF24L01+.<br><b>Receiver (R1):</b> ESP32 DevKit, OLED SSD1306, Status LEDs, Alarm Buzzer, NRF24L01+.</p>";
-  html += "<h2>2. E2E Authentication</h2><p>Both devices generate a unique, fixed 8-character hardware address from their MAC address. Communication is strictly gated using these addresses. NRF24L01+ dynamic pipe addressing provides hardware-level filtering, meaning a device will physically ignore packets not addressed to its unique ID.</p>";
-  html += "<h2>3. Two-Way Handshake</h2><p>Data transmission uses a custom application-layer two-way handshake. T1 transmits a DATA packet embedded with both the Sender ID and Target ID. R1 receives, verifies both IDs, and immediately replies with an ACK packet similarly encrypted with IDs. This ensures true E2E style code verification and immunity to cross-talk from identical models.</p>";
-  html += "<h2>4. Web Portal & Wi-Fi</h2><p>Each device hosts an independent Wi-Fi Access Point (T1/R1). Setup requires pairing the devices by swapping their unique codes. The default password is 'savewater', modifiable via the dashboard. Hard resets can be initiated through the settings menu.</p>";
-  html += "<a href='/' class='btn' style='margin-top:20px'>Back to Dashboard</a></div></body></html>";
+  html += "</style></head><body><div class='panel'><h2>HeyTaps Architecture & Docs</h2>";
+  html += "<h3 style='color:#00aaff;margin-top:10px'>1. Hardware Overview</h3><p class='hint' style='margin-bottom:15px'><b>Transceiver (T1):</b> ESP32, HC-SR04 Ultrasonic, DHT11, NRF24L01+.<br><b>Receiver (R1):</b> ESP32, OLED SSD1306, Status LEDs, Alarm Buzzer, NRF24L01+.</p>";
+  html += "<h3 style='color:#00aaff'>2. E2E Authentication</h3><p class='hint' style='margin-bottom:15px'>Both devices generate a unique, fixed 8-character hardware address from their MAC address. Communication is strictly gated using these addresses. NRF24L01+ dynamic pipe addressing provides hardware-level filtering.</p>";
+  html += "<h3 style='color:#00aaff'>3. Two-Way Handshake</h3><p class='hint' style='margin-bottom:15px'>Data transmission uses a custom application-layer two-way handshake. T1 transmits a DATA packet embedded with IDs. R1 receives, verifies both IDs, and immediately replies with an ACK packet similarly encrypted.</p>";
+  html += "<h3 style='color:#00aaff'>4. Web Portal & Wi-Fi</h3><p class='hint' style='margin-bottom:15px'>Each device hosts an independent Wi-Fi Access Point (T1/R1). Setup requires pairing the devices by swapping their unique codes.</p>";
+  html += "<a href='/' class='btn' style='margin-top:20px;text-align:center;display:block'>Back to Dashboard</a></div></body></html>";
   server.send(200, "text/html", html);
 }
 
@@ -235,13 +299,11 @@ void handlePair() {
     c.toUpperCase(); c.trim();
     pairedId = strtoul(c.c_str(), NULL, 16);
     prefs.putUInt("pairedId", pairedId);
-    isPaired = true;
-    setupPipes();
-    radio.openReadingPipe(1, rxPipe);
-    radio.startListening();
   }
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "");
+  delay(500);
+  ESP.restart();
 }
 
 void handleCalib() {
@@ -249,6 +311,19 @@ void handleCalib() {
   if (server.hasArg("full")) { tankFull_cm = server.arg("full").toFloat(); prefs.putFloat("tfull", tankFull_cm); }
   if (server.hasArg("low")) { lowThreshold = server.arg("low").toInt(); prefs.putInt("low", lowThreshold); }
   if (server.hasArg("high")) { highThreshold = server.arg("high").toInt(); prefs.putInt("high", highThreshold); }
+  server.sendHeader("Location", "/");
+  server.send(302, "text/plain", "");
+}
+
+void handlePump() {
+  if (server.hasArg("enabled")) {
+    pumpEnabled = server.arg("enabled").toInt() == 1;
+    prefs.putBool("pumpEnabled", pumpEnabled);
+  }
+  if (server.hasArg("startLvl")) {
+    pumpStartLevel = server.arg("startLvl").toInt();
+    prefs.putInt("pumpStartLevel", pumpStartLevel);
+  }
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "");
 }
@@ -279,6 +354,7 @@ void setup() {
   for (auto p : leds) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
   pinMode(BUZZER_PIN, OUTPUT); digitalWrite(BUZZER_PIN, LOW);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(PUMP_PIN, OUTPUT); digitalWrite(PUMP_PIN, LOW);
   
   Wire.begin();
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -309,6 +385,10 @@ void setup() {
   tankFull_cm = prefs.getFloat("tfull", 5.0f);
   lowThreshold = prefs.getInt("low", 20);
   highThreshold = prefs.getInt("high", 95);
+  pumpEnabled = prefs.getBool("pumpEnabled", false);
+  pumpStartLevel = prefs.getInt("pumpStartLevel", 20);
+  pumpState = prefs.getBool("pumpState", false);
+  digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
   
   if (pairedId != 0) {
     isPaired = true;
@@ -321,10 +401,12 @@ void setup() {
   server.on("/docs", handleDocs);
   server.on("/pair", handlePair);
   server.on("/calib", handleCalib);
+  server.on("/pump", handlePump);
   server.on("/settings", handleSettings);
   server.on("/reset", handleReset);
   server.begin();
   
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN);
   if (!radio.begin()) {
     Serial.println("NRF24 FAIL!");
     display.println("NRF24 ERROR"); display.display();
@@ -447,9 +529,32 @@ void updateOLED() {
   }
 }
 
+void updatePump() {
+  bool oldState = pumpState;
+
+  if (!pumpEnabled) {
+    pumpState = false;
+  } else if (dataReceived) {
+    // Only update automatically if we actually have water level data
+    if (computedWater < (uint8_t)pumpStartLevel) {
+      pumpState = true;
+    } else if (computedWater >= (uint8_t)highThreshold) {
+      pumpState = false;
+    }
+  }
+
+  if (oldState != pumpState) {
+    prefs.putBool("pumpState", pumpState);
+  }
+
+  digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
+}
+
+unsigned long lastOledUpdate = 0;
 void loop() {
   server.handleClient();
   handleButton();
+  updatePump();
   
   if (isPaired && radio.available()) {
     DataPacket rx;
@@ -466,6 +571,7 @@ void loop() {
       DataPacket ack;
       ack.senderId = myId;
       ack.targetId = pairedId;
+      ack.distance_mm = computedWater; // Send back the calculated water level
       ack.msgType = 1;
       
       radio.stopListening();
@@ -480,5 +586,9 @@ void loop() {
   }
   
   updateBuzzerTone();
-  updateOLED();
+  
+  if (millis() - lastOledUpdate >= 200) {
+    lastOledUpdate = millis();
+    updateOLED();
+  }
 }
